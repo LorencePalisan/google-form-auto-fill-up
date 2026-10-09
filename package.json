@@ -1,0 +1,7 @@
+{
+  "name": "google-form-csv-filler",
+  "private": true,
+  "type": "module",
+  "scripts": {"inspect": "node form-agent.mjs inspect", "fill": "node form-agent.mjs fill"},
+  "dependencies": {"csv-parse": "^6.1.0", "playwright": "^1.56.0"}
+}

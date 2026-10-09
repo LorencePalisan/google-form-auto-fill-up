@@ -1,0 +1,5 @@
+node_modules/
+*.csv
+used-emails.json
+used-emails.json.*.tmp
+last-error.json
