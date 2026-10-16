@@ -1,5 +1,28 @@
 # Google Form CSV filler
 
+The local lab now displays **Pearson's r and a two-sided hypothesis test** for Social Network versus Customer Acquisition. Open `local-replica/dist/index.html` for demonstrations. For workbook analysis, run `npm.cmd run analyze:pearson -- --final "Actual Survey Result.xlsx" --pilot "latest-response.xlsx" --out "reports/my-pearson-run"`. This audits patterns before inference and blocks flagged data. See [analysis commands](docs/commands.md) and [lab methods](local-replica/README.md). Genuine responses are required; the software does not target rejection of the null hypothesis.
+
+## Project layout
+
+Run commands from the project root.
+
+| Location | Contents |
+| --- | --- |
+| Root `*.mjs` | Runners, shared helpers, and sample generators |
+| `sample.csv`, `synthetic-test-responses.csv` | Active runner inputs |
+| `used-emails.json`, `test-form-used-emails.json` | Active submission histories; keep these to preserve progress |
+| `data/exports/` | Spreadsheet exports, including `test-response-actual.xlsx` |
+| `data/samples/` | Generated example datasets and the response template |
+| `data/schemas/` | Saved form schema |
+| `reports/` | Analysis results and history recovery records |
+| `backups/` | Previous email history snapshots |
+| `docs/` | [Commands](docs/commands.md) and [test runner guide](docs/test-form-guide.md) |
+| `local-replica/` | Existing local form replica |
+
+`last-error.json`, when present, contains the latest runner diagnostic.
+The test runner command remains `node test-form-runner.mjs --limit 39 --submit`.
+
+
 ## Using your sample.csv
 
 To run without terminal prompts, fill random answers, select the affirmative consent option, and submit the next 5 unused emails:

@@ -3,3 +3,18 @@ node_modules/
 used-emails.json
 used-emails.json.*.tmp
 last-error.json
+
+# Private inputs, response exports, histories, and analysis artifacts
+*.xlsx
+*.xls
+*.xlsm
+*.ods
+*.docx
+*.tsv
+*used-emails*.json
+*.bak
+backups/
+data/
+reports/
+__pycache__/
+*.pyc

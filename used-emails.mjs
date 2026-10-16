@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 export const normalizeEmail = email => email.trim().toLowerCase();
 
@@ -27,6 +28,7 @@ export function selectUnused(rows, emailTitle, used, limit) {
 }
 
 export function saveUsedEmail(path, email) {
+  if (path instanceof URL) path = fileURLToPath(path);
   const used = loadUsedEmails(path);
   used.add(normalizeEmail(email));
   const temporary = `${path}.${process.pid}.tmp`;

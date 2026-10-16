@@ -3,9 +3,10 @@ import { readResponses } from './csv-input.mjs';
 import { selectChoice } from './form-controls.mjs';
 import { loadUsedEmails, selectUnused, saveUsedEmail } from './used-emails.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 
-const url = 'https://docs.google.com/forms/d/e/1FAIpQLSfXh2c91worY-PM5FTCyHS2ymS-vS4xHfgkgMHtC5UkYY1gCw/viewform';
+const url = 'https://docs.google.com/forms/d/e/1FAIpQLSeEBmONXMFEsAIhIlMhMj5GByvQME-pGh18XTlTmBMPHfkKzg/viewform?usp=dialog';
 const [command, file, ...flags] = process.argv.slice(2);
 if (!['inspect', 'fill'].includes(command) || (command === 'fill' && !file)) {
   console.error('Usage: node form-agent.mjs inspect | fill answers.csv [--limit N] [--random] [--submit] [--auto]');
@@ -28,7 +29,7 @@ const shared = answersFile ? JSON.parse(readFileSync(answersFile, 'utf8')) : {};
 if (!shared || Array.isArray(shared) || typeof shared !== 'object' || Object.values(shared).some(value => typeof value !== 'string')) {
   throw new Error('Shared answers must be a JSON object mapping question titles to strings.');
 }
-const historyFile = new URL('./used-emails.json', import.meta.url).pathname;
+const historyFile = fileURLToPath(new URL('./used-emails.json', import.meta.url));
 const rows = command === 'fill' ? selectUnused(
   readResponses(readFileSync(file), emailTitle).map(row => ({ ...shared, ...row })),
   emailTitle, loadUsedEmails(historyFile), limit,
@@ -49,7 +50,7 @@ const submitMode = autoMode || flags.includes('--submit');
 const nextButton = () => page.getByRole('button', { name: /^\s*(Next|Susunod)\s*$/i });
 const submitButton = () => page.getByRole('button', { name: /^\s*(Submit|Isumite|Ipasa)\s*$/i });
 async function waitForControls() {
-  await page.waitForLoadState('load');
+  await page.waitForLoadState('domcontentloaded');
   try {
     await nextButton().or(submitButton()).first().waitFor({ state: 'visible', timeout: 15000 });
   } catch {
@@ -59,8 +60,83 @@ async function waitForControls() {
 }
 const confirmationMessage = () => page.getByText(/Your response has been recorded|Naitala na ang iyong tugon|Naitala ang iyong tugon/i);
 const pick = items => items[Math.floor(Math.random() * items.length)];
+const likertBatchDecks = new Map();
 
-async function randomAnswer(group, title) {
+function balancedLikertChoiceIndex(key, respondentIndex, counts = [14, 16, 6, 3]) {
+  const batch = Math.floor(respondentIndex / 39);
+  const deckKey = `${key}:${batch}:${counts.join('-')}`;
+  if (!likertBatchDecks.has(deckKey)) {
+    const deck = counts.flatMap((count, choiceIndex) => Array(count).fill(choiceIndex));
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    likertBatchDecks.set(deckKey, deck);
+  }
+  return likertBatchDecks.get(deckKey)[respondentIndex % 39];
+}
+
+async function selectRadioAnswer(group, choices, title = '', respondentIndex, selectionKey = title) {
+  const facebook = group.getByRole('radio', { name: /^Facebook$/i });
+  const tiktok = group.getByRole('radio', { name: /^TikTok$/i });
+  const instagram = group.getByRole('radio', { name: /^Instagram$/i });
+  if (await facebook.count() === 1 && await tiktok.count() === 1 && await instagram.count() === 1) {
+    const roll = Math.random();
+    await selectChoice(roll < 0.5 ? facebook : roll < 0.65 ? tiktok : instagram);
+    return true;
+  }
+  const noneOfTheAbove = group.getByRole('radio', { name: /none of the above/i });
+  if (await noneOfTheAbove.count()) {
+    const available = [];
+    for (const choice of choices) {
+      const label = await choice.evaluate(element => {
+        const labelledBy = (element.getAttribute('aria-labelledby') || '').split(/\s+/)
+          .map(id => document.getElementById(id)?.textContent || '').join(' ');
+        return [element.getAttribute('aria-label'), labelledBy, element.innerText, element.getAttribute('data-value')]
+          .filter(Boolean).join(' ');
+      });
+      if (!/none of the above/i.test(label)) available.push(choice);
+    }
+    // Some Google Forms radios expose their accessible name only through the role locator.
+    if (available.length === choices.length && choices.length > 1) available.pop();
+    if (available.length) { await selectChoice(pick(available)); return true; }
+    throw new Error('Could not identify an answer that excludes "None of the above".');
+  }
+  return selectLikertAnswer(group, choices, title, respondentIndex, selectionKey);
+}
+
+async function selectLikertAnswer(group, choices, title = '', respondentIndex, selectionKey = title) {
+  if (choices.length === 4) {
+    const counts = /brand visibility/i.test(title) ? [6, 27, 6, 0] : [14, 16, 6, 3];
+    const index = Number.isInteger(respondentIndex)
+      ? balancedLikertChoiceIndex(selectionKey, respondentIndex, counts)
+      : (() => {
+          const roll = Math.random();
+          const first = counts[0] / 39;
+          const second = first + counts[1] / 39;
+          const third = second + counts[2] / 39;
+          return roll < first ? 0 : roll < second ? 1 : roll < third ? 2 : 3;
+        })();
+    await selectChoice(choices[index]);
+    return true;
+  }
+  const stronglyAgree = group.getByRole('radio', { name: /4\s*[-–—]\s*Strong(?:ly\s+)?Agree\b/i });
+  const agree = group.getByRole('radio', { name: /3\s*[-–—]\s*Agree\b/i });
+  if (await stronglyAgree.count() === 1 && await agree.count() === 1) {
+    await selectChoice(Math.random() < 0.7 ? stronglyAgree : agree);
+    return true;
+  }
+  // Google Forms grids can expose each radio with an inaccessible or combined name.
+  // Their four Likert columns are ordered 4, 3, 2, 1, so only select the first two.
+  if (choices.length === 4) {
+    await selectChoice(Math.random() < 0.7 ? choices[0] : choices[1]);
+    return true;
+  }
+  if (choices.length) await selectChoice(pick(choices));
+  return choices.length > 0;
+}
+
+async function randomAnswer(group, title, respondentIndex) {
   if (/consent|voluntar|I Agree|sumasang.ayon/i.test(await group.innerText())) {
     if (autoMode) {
       const agreeName = /^(I Agree\b|Agree\b|Sumasang[ -]?ayon\b|Oo\b)/i;
@@ -76,15 +152,20 @@ async function randomAnswer(group, title) {
   // Handle each radio group separately, including rows in multiple-choice grids.
   const radioGroups = group.getByRole('radiogroup');
   if (await radioGroups.count()) {
-    for (const radioGroup of await radioGroups.all()) {
+    const groups = await radioGroups.all();
+    for (const [rowIndex, radioGroup] of groups.entries()) {
       const choices = await radioGroup.getByRole('radio').all();
-      if (choices.length) await selectChoice(pick(choices));
+      await selectRadioAnswer(radioGroup, choices, title, respondentIndex, `${title}#${rowIndex}`);
     }
     return;
   }
   for (const role of ['radio', 'checkbox']) {
     const choices = await group.getByRole(role).all();
-    if (choices.length) { await selectChoice(pick(choices)); return; }
+    if (choices.length) {
+      if (role === 'radio') await selectRadioAnswer(group, choices, title, respondentIndex);
+      else await selectChoice(pick(choices));
+      return;
+    }
   }
   const dropdown = group.getByRole('listbox');
   if (await dropdown.count() === 1) {
@@ -148,7 +229,7 @@ async function fillQuestion(group, value) {
 }
 
 try {
-  await page.goto(url);
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   if (autoMode) {
     await page.getByRole('listitem').filter({ has: page.getByRole('heading') }).first().waitFor({ timeout: 15000 });
   } else {
@@ -160,7 +241,7 @@ try {
     }
   } else {
     for (const [index, row] of rows.entries()) {
-      if (index) await page.goto(url);
+      if (index) await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
       const matched = new Set();
       while (true) {
         await waitForControls();
@@ -170,7 +251,7 @@ try {
               ? emailTitle : null
           );
           if (key === null) {
-            if (randomMode) await randomAnswer(group, title);
+            if (randomMode) await randomAnswer(group, title, index);
             continue;
           }
           if (matched.has(title)) throw new Error(`Duplicate question title: ${title}`);
